@@ -102,7 +102,7 @@ const ProjectCard = ({ project, index }: { project: any; index: number }) => {
             
             <div className="flex flex-wrap items-center gap-3 mt-auto">
               <AnimatePresence>
-                {project.technologies.map((tech: string, i: number) => (
+                {project.technologies.map((tech: string) => (
                   <motion.span 
                     key={tech} 
                     initial={{ opacity: 0.8, y: 0 }}

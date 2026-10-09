@@ -1,0 +1,297 @@
+import { Outlet, Link, useLocation } from 'react-router-dom';
+import { Home, Receipt, PieChart, Repeat, ListTodo, ShoppingCart, MessageSquare, Bot, Bell, Settings as SettingsIcon, Menu, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { io } from 'socket.io-client';
+import { useAppContext } from '../context/AppContext';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { notificationApi } from '../services/api';
+
+const Layout = () => {
+  const location = useLocation();
+  const queryClient = useQueryClient();
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [hasNewNotification, setHasNewNotification] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const { user, activeGroup } = useAppContext();
+
+  // Fetch real notifications from database
+  const { data: notifications = [] } = useQuery({
+    queryKey: ['notifications'],
+    queryFn: async () => {
+      const res = await notificationApi.getNotifications();
+      return res.data;
+    },
+    enabled: !!user
+  });
+
+  useEffect(() => {
+    // Attempt to connect to backend server for live notifications
+    const socket = io(import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5000');
+    
+    if (user) {
+      socket.emit('join_user', user.id);
+    }
+    
+    // Connect to active group channel
+    const activeGroupId = localStorage.getItem('Roomio_active_group');
+    if (activeGroupId) {
+      socket.emit('join_group', activeGroupId);
+    }
+
+
+    socket.on('new_notification', () => {
+      setHasNewNotification(true);
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    });
+
+    socket.on('new_expense', () => {
+      queryClient.invalidateQueries({ queryKey: ['dashboard', activeGroupId] });
+    });
+
+    socket.on('expense_deleted', () => {
+      queryClient.invalidateQueries({ queryKey: ['dashboard', activeGroupId] });
+    });
+
+    socket.on('payment_recorded', () => {
+      queryClient.invalidateQueries({ queryKey: ['dashboard', activeGroupId] });
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [user]);
+
+  const navItems = [
+    { name: 'Dashboard', path: '/app', icon: Home },
+    { name: 'Expenses', path: '/app/expenses', icon: Receipt, requiresGroup: true },
+    { name: 'Settlements', path: '/app/settlements', icon: PieChart, requiresGroup: true },
+    { name: 'Recurring', path: '/app/recurring', icon: Repeat, requiresGroup: true },
+    { name: 'Chores', path: '/app/chores', icon: ListTodo, requiresGroup: true },
+    { name: 'Shopping', path: '/app/shopping', icon: ShoppingCart, requiresGroup: true },
+  ].filter(item => !item.requiresGroup || activeGroup);
+
+  const bottomNavItems = [
+    navItems.find(i => i.name === 'Dashboard'),
+    navItems.find(i => i.name === 'Expenses'),
+    navItems.find(i => i.name === 'Settlements'),
+    navItems.find(i => i.name === 'Chores'),
+  ].filter(Boolean) as typeof navItems;
+
+  return (
+    <div className="flex h-screen bg-slate-50 font-sans">
+      {/* Sidebar for Desktop */}
+      <aside className="w-64 bg-white border-r border-slate-200 hidden md:flex flex-col z-20">
+        <div className="h-16 flex items-center px-6 border-b border-slate-100">
+          <div className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600 flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold text-lg shadow-sm">R</div>
+            Roomio
+          </div>
+        </div>
+
+        <nav className="flex-1 p-4 space-y-1">
+          <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4 px-3">Menu</div>
+          {navItems.map((item) => {
+            const isActive = location.pathname === item.path || (item.path !== '/app' && location.pathname.startsWith(item.path));
+            return (
+              <Link
+                key={item.name}
+                to={item.path}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 group ${
+                  isActive 
+                    ? 'bg-blue-50 text-blue-700 font-medium' 
+                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                }`}
+              >
+                <item.icon className={`w-5 h-5 ${isActive ? 'text-blue-600' : 'text-slate-400 group-hover:text-slate-600'}`} />
+                {item.name}
+              </Link>
+            );
+          })}
+        </nav>
+
+        <div className="p-4 border-t border-slate-100 flex items-center justify-center">
+          <div className="text-xs text-slate-400 font-medium tracking-wide">Roomio 1.0</div>
+        </div>
+      </aside>
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col h-screen overflow-hidden">
+        {/* Top Header */}
+        <header className="h-16 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 sm:px-6 z-10">
+          <div className="md:hidden text-xl font-bold text-blue-600">Roomio</div>
+          <div className="flex-1" />
+          <div className="flex items-center gap-2 sm:gap-4 relative">
+            {activeGroup && (
+              <>
+                <Link 
+                  to="/app/bot"
+                  className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors relative"
+                >
+                  <Bot className="w-5 h-5" />
+                </Link>
+                <Link 
+                  to="/app/chat"
+                  className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
+                >
+                  <MessageSquare className="w-5 h-5" />
+                </Link>
+              </>
+            )}
+
+            <div className="relative">
+              <button 
+                onClick={() => {
+                  setShowProfileMenu(!showProfileMenu);
+                  setShowNotifications(false);
+                }} 
+                className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-500 to-indigo-500 text-white flex items-center justify-center font-medium shadow-sm hover:opacity-90 transition-opacity relative"
+              >
+                {user?.name?.charAt(0) || 'U'}
+                {hasNewNotification && (
+                  <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 border-2 border-white rounded-full"></span>
+                )}
+              </button>
+
+              {/* Profile Menu Dropdown */}
+              {showProfileMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowProfileMenu(false)} />
+                  <div className="absolute top-12 right-0 w-48 bg-white border border-slate-200 shadow-xl rounded-xl z-50 overflow-hidden flex flex-col">
+                    <Link 
+                      to="/app/settings" 
+                      onClick={() => setShowProfileMenu(false)} 
+                      className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors text-slate-700 text-sm font-medium border-b border-slate-100"
+                    >
+                      <SettingsIcon className="w-4 h-4 text-slate-400" /> Settings
+                    </Link>
+                    <button 
+                      onClick={() => {
+                        setShowProfileMenu(false);
+                        setHasNewNotification(false);
+                        setShowNotifications(true);
+                      }} 
+                      className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors text-slate-700 text-sm font-medium"
+                    >
+                      <Bell className="w-4 h-4 text-slate-400" /> 
+                      Notifications
+                      {hasNewNotification && <span className="w-2 h-2 bg-red-500 rounded-full ml-auto"></span>}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* Notification List Dropdown */}
+              {showNotifications && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowNotifications(false)} />
+                  <div className="absolute top-12 right-0 w-[300px] sm:w-80 bg-white border border-slate-200 shadow-xl rounded-xl z-50 overflow-hidden flex flex-col max-h-96">
+                    <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                      <h3 className="font-semibold text-slate-800">Notifications</h3>
+                      <button 
+                        onClick={async () => {
+                          await notificationApi.markAllAsRead();
+                          queryClient.invalidateQueries({ queryKey: ['notifications'] });
+                        }}
+                        className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                      >
+                        Clear all
+                      </button>
+                    </div>
+                    <div className="overflow-y-auto flex-1">
+                      {notifications.length === 0 ? (
+                        <div className="p-8 text-center text-slate-500 text-sm flex flex-col items-center">
+                          <Bell className="w-8 h-8 text-slate-300 mb-2" />
+                          You're all caught up!
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-slate-100">
+                          {notifications.map((notif: any) => (
+                            <div key={notif.id} className={`p-4 transition-colors text-sm text-slate-700 flex flex-col gap-1 cursor-pointer ${notif.read ? 'opacity-60 bg-white' : 'bg-blue-50/50 hover:bg-slate-50'}`}
+                              onClick={async () => {
+                                 if (!notif.read) {
+                                   await notificationApi.markAsRead(notif.id);
+                                   queryClient.invalidateQueries({ queryKey: ['notifications'] });
+                                 }
+                              }}
+                            >
+                              <span className="font-semibold">{notif.title}</span>
+                              <span>{notif.message}</span>
+                              <span className="text-xs text-slate-400 mt-1">{new Date(notif.createdAt).toLocaleDateString()}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </header>
+
+        {/* Scrollable Main Content */}
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6 lg:p-8 pb-24 md:pb-8 relative">
+          <div className="absolute top-0 left-0 w-full h-64 bg-blue-600/5 -z-10 pointer-events-none rounded-b-[3rem]"></div>
+          <Outlet />
+        </main>
+      </div>
+
+      {/* Mobile nav (bottom) */}
+      <div className="md:hidden fixed bottom-0 w-full bg-white border-t border-slate-200 z-40 flex justify-around px-2 py-2 pb-safe shadow-[0_-4px_6px_-1px_rgb(0,0,0,0.05)]">
+        {bottomNavItems.map((item) => {
+          const isActive = location.pathname === item.path || (item.path !== '/app' && location.pathname.startsWith(item.path));
+          return (
+            <Link
+              key={item.name}
+              to={item.path}
+              className={`flex flex-col items-center justify-center p-2 rounded-xl transition-colors ${isActive ? 'text-blue-600' : 'text-slate-500'}`}
+            >
+              <item.icon className={`w-6 h-6 mb-1 ${isActive ? 'stroke-2' : 'stroke-[1.5]'}`} />
+              <span className="text-[10px] font-medium">{item.name === 'Dashboard' ? 'Home' : item.name}</span>
+            </Link>
+          );
+        })}
+        <button
+          onClick={() => setShowMobileMenu(true)}
+          className="flex flex-col items-center justify-center p-2 rounded-xl text-slate-500 transition-colors"
+        >
+          <Menu className="w-6 h-6 mb-1 stroke-[1.5]" />
+          <span className="text-[10px] font-medium">Menu</span>
+        </button>
+      </div>
+
+      {/* Mobile Full Screen Menu Overlay */}
+      {showMobileMenu && (
+        <div className="md:hidden fixed inset-0 z-50 bg-white flex flex-col">
+          <div className="flex items-center justify-between p-4 border-b border-slate-100">
+            <div className="text-xl font-bold text-blue-600">Menu</div>
+            <button onClick={() => setShowMobileMenu(false)} className="p-2 text-slate-500 bg-slate-100 rounded-full">
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4 space-y-2">
+            {navItems.map((item) => {
+              const isActive = location.pathname === item.path || (item.path !== '/app' && location.pathname.startsWith(item.path));
+              return (
+                <Link
+                  key={item.name}
+                  to={item.path}
+                  onClick={() => setShowMobileMenu(false)}
+                  className={`flex items-center gap-4 p-4 rounded-xl transition-all ${isActive ? 'bg-blue-50 text-blue-600' : 'text-slate-700 hover:bg-slate-50'}`}
+                >
+                  <div className={`p-2 rounded-lg ${isActive ? 'bg-blue-100' : 'bg-slate-100'}`}>
+                    <item.icon className="w-6 h-6" />
+                  </div>
+                  <span className="text-lg font-medium">{item.name}</span>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Layout;

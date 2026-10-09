@@ -1,0 +1,156 @@
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import http from 'http';
+import { Server } from 'socket.io';
+import { register, login, updateProfile, googleLogin, forgotPassword, resetPassword } from './controllers/authController';
+import { createExpense, getGroupExpenses, deleteExpense } from './controllers/expenseController';
+import { getGroupBalancesAndSettlements } from './controllers/settlementController';
+import { getBalanceDetails } from './controllers/balanceDetailsController';
+import { recordPayment } from './controllers/paymentController';
+import { createGroup, getUserGroups, joinGroup, updateGroup, leaveGroup } from './controllers/groupController';
+import { getUserNotifications, markNotificationAsRead, markAllAsRead, sendReminder } from './controllers/notificationController';
+import { createRecurringExpense, getGroupRecurringExpenses, updateRecurringExpense } from './controllers/recurringExpenseController';
+import { createChore, getChores, updateChoreAssignment, deleteChore } from './controllers/choreController';
+import { createShoppingItem, getShoppingItems, updateShoppingItem, deleteShoppingItem } from './controllers/shoppingController';
+import { getGroupStats } from './controllers/statsController';
+import { getDebtSimplification } from './controllers/debtSimplifyController';
+import { getMessages, createMessage, deleteMessage } from './controllers/chatController';
+import { getActivityLogs } from './controllers/activityController';
+import { verifyWebhook, handleIncomingMessage } from './controllers/whatsappController';
+import { RoomioBotService } from './bot/botService';
+import { authenticateToken } from './middleware/auth';
+import { checkGroupMembership } from './middleware/groupAuth';
+import { initCronJobs } from './cron/recurringExpenseJob';
+import { startTelegramBot } from './bot/telegramBot';
+
+dotenv.config();
+
+// Start cron jobs
+initCronJobs();
+
+// Start Telegram Bot
+startTelegramBot();
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: '*' }
+});
+
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Pass io to request so controllers can use it
+app.use((req, res, next) => {
+  (req as any).io = io;
+  next();
+});
+
+const PORT = process.env.PORT || 5000;
+
+// Health Check
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', message: 'Roomio API is running' });
+});
+
+// WhatsApp Webhook (Public)
+app.get('/api/whatsapp/webhook', verifyWebhook);
+app.post('/api/whatsapp/webhook', handleIncomingMessage);
+
+// Auth Routes
+app.post('/api/auth/register', register);
+app.post('/api/auth/login', login);
+app.post('/api/auth/google', googleLogin);
+app.post('/api/auth/forgot-password', forgotPassword);
+app.post('/api/auth/reset-password', resetPassword);
+app.put('/api/auth/profile', authenticateToken, updateProfile);
+
+// Group Routes (Protected)
+app.post('/api/groups', authenticateToken, createGroup);
+app.get('/api/groups', authenticateToken, getUserGroups);
+app.post('/api/groups/join', authenticateToken, joinGroup);
+app.put('/api/groups/:groupId', authenticateToken, checkGroupMembership, updateGroup);
+app.delete('/api/groups/:groupId/leave', authenticateToken, checkGroupMembership, leaveGroup);
+
+// Expense Routes (Protected)
+app.post('/api/groups/:groupId/expenses', authenticateToken, checkGroupMembership, createExpense);
+app.get('/api/groups/:groupId/expenses', authenticateToken, checkGroupMembership, getGroupExpenses);
+app.delete('/api/groups/:groupId/expenses/:expenseId', authenticateToken, checkGroupMembership, deleteExpense);
+app.post('/api/groups/:groupId/recurring', authenticateToken, checkGroupMembership, createRecurringExpense);
+app.get('/api/groups/:groupId/recurring', authenticateToken, checkGroupMembership, getGroupRecurringExpenses);
+app.put('/api/groups/:groupId/recurring/:expenseId', authenticateToken, checkGroupMembership, updateRecurringExpense);
+
+// Settlement Routes (Protected)
+app.get('/api/groups/:groupId/balances', authenticateToken, checkGroupMembership, getGroupBalancesAndSettlements);
+app.get('/api/groups/:groupId/balance-details', authenticateToken, checkGroupMembership, getBalanceDetails);
+app.post('/api/groups/:groupId/payments', authenticateToken, checkGroupMembership, recordPayment);
+
+// Chores Routes (Protected)
+app.post('/api/groups/:groupId/chores', authenticateToken, checkGroupMembership, createChore);
+app.get('/api/groups/:groupId/chores', authenticateToken, checkGroupMembership, getChores);
+app.put('/api/groups/:groupId/chores/assignments/:assignmentId', authenticateToken, checkGroupMembership, updateChoreAssignment);
+app.delete('/api/groups/:groupId/chores/:choreId', authenticateToken, checkGroupMembership, deleteChore);
+
+// Shopping Routes (Protected)
+app.post('/api/groups/:groupId/shopping', authenticateToken, checkGroupMembership, createShoppingItem);
+app.get('/api/groups/:groupId/shopping', authenticateToken, checkGroupMembership, getShoppingItems);
+app.put('/api/groups/:groupId/shopping/:itemId', authenticateToken, checkGroupMembership, updateShoppingItem);
+app.delete('/api/groups/:groupId/shopping/:itemId', authenticateToken, checkGroupMembership, deleteShoppingItem);
+
+// Chat Routes (Protected)
+app.get('/api/groups/:groupId/messages', authenticateToken, checkGroupMembership, getMessages);
+app.post('/api/groups/:groupId/messages', authenticateToken, checkGroupMembership, createMessage);
+app.delete('/api/groups/:groupId/messages/:messageId', authenticateToken, checkGroupMembership, deleteMessage);
+
+// Activity Route (Protected)
+app.get('/api/groups/:groupId/activity', authenticateToken, checkGroupMembership, getActivityLogs);
+
+// Stats Route (Protected)
+app.get('/api/groups/:groupId/stats', authenticateToken, checkGroupMembership, getGroupStats);
+
+// Notification Routes (Protected)
+app.get('/api/notifications', authenticateToken, getUserNotifications);
+app.post('/api/notifications/remind', authenticateToken, sendReminder);
+app.put('/api/notifications/:notificationId/read', authenticateToken, markNotificationAsRead);
+app.put('/api/notifications/read-all', authenticateToken, markAllAsRead);
+
+// Bot Route (Protected)
+app.post('/api/bot/chat', authenticateToken, async (req, res) => {
+  const { text, groupId } = req.body;
+  const userId = (req as any).user?.userId;
+  if (!text) return res.status(400).json({ error: 'Text is required' });
+  
+  const intent = await RoomioBotService.extractIntent(text, userId, groupId);
+  res.json({ result: intent });
+});
+
+app.post('/api/bot/scan', authenticateToken, async (req, res) => {
+  const { base64Image, mimeType, groupId } = req.body;
+  if (!base64Image) return res.status(400).json({ error: 'Image is required' });
+  
+  try {
+    const data = await RoomioBotService.scanReceipt(base64Image, mimeType || 'image/jpeg', groupId);
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to scan receipt' });
+  }
+});
+
+io.on('connection', (socket) => {
+  console.log('A user connected:', socket.id);
+  socket.on('join_group', (groupId) => {
+    socket.join(groupId);
+    console.log(`User joined group: ${groupId}`);
+  });
+  socket.on('join_user', (userId) => {
+    socket.join(userId);
+    console.log(`User joined personal channel: ${userId}`);
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
+
